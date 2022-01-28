@@ -7,8 +7,11 @@ package lambda
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"time"
+	"net/http"
+	"log"
+	"io/ioutil"
+	"fmt"
 
 	"github.com/open-policy-agent/opa/logging"
 	"github.com/open-policy-agent/opa/plugins"
@@ -24,7 +27,7 @@ const (
 )
 
 var (
-	extensionName = filepath.Base(os.Args[0]) // extension name has to match the filename
+	extensionName = "start.sh" // extension name has to match the filename
 	// Decision logs are typically the most important plugin to trigger when lambda is shutting down.
 	// Status is nice to have, but not critical as the instance will disappear in just a second.
 	// Bundle and discovery don't do anything on shutdown.
@@ -120,6 +123,7 @@ func (p *PluginFactory) New(manager *plugins.Manager, config interface{}) plugin
 		stop:    make(chan chan struct{}),
 		logger:  logger,
 		client:  NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API")),
+		logsclient:  NewLogsClient(os.Getenv("AWS_LAMBDA_RUNTIME_API")),
 	}
 
 	manager.UpdatePluginStatus(Name, &plugins.Status{State: plugins.StateNotReady})
@@ -148,6 +152,7 @@ type Plugin struct {
 	stop            chan chan struct{}
 	logger          logging.Logger
 	client          *Client
+	logsclient	*LogsClient
 	lastTriggerTime time.Time
 }
 
@@ -159,6 +164,24 @@ func (p *Plugin) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Start an HTTP server to listen for logs
+	http.HandleFunc("/", func(res http.ResponseWriter, req *http.Request) {
+		defer req.Body.Close()
+		body, _ := ioutil.ReadAll(req.Body)
+		fmt.Printf("Received logs", body)
+		fmt.Fprint(res, "OK")
+	})
+	go func() {
+		log.Fatal(http.ListenAndServe(":8080", nil))
+	}()
+
+	// Create a logs API client now we're registered and have an identifier
+	err = p.logsclient.Subscribe(ctx, p.client.extensionID)
+	if err != nil {
+		return err
+	}
+
 	// Most of the initialization needs to be done in a goroutine because the plugin manager must
 	// finish starting all the plugins before the server is initialized, and the server must be
 	// initialized before the Lambda Service is called for the first event. Plugin state must also
@@ -268,6 +291,6 @@ func (p *Plugin) triggerPlugin(ctx context.Context, pluginName string) {
 	}
 }
 
-func init() {
+func Init() {
 	runtime.RegisterPlugin(Name, &PluginFactory{})
 }
