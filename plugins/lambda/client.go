@@ -11,10 +11,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"io/ioutil"
 	"net/http"
-	"net/http/httputil"
 )
 
 // RegisterResponse is the body of the response for /register
@@ -202,84 +200,4 @@ func (e *Client) ExitError(ctx context.Context, errorType string) (*StatusRespon
 		return nil, err
 	}
 	return &res, nil
-}
-
-// LogsClient is a simple client for the Lambda Logs API
-type LogsClient struct {
-	baseURL     string
-	httpClient  *http.Client
-	extensionID string
-}
-
-// Lambda Log API input types
-type LogType string
-const (
-	// This version supports platform.runtimeDone which we need
-	logsApiSchemaVersion string = "2021-03-18"
-
-	// Types of lambda logs
-	PlatformLogs LogType = "platform"
-	FunctionLogs LogType = "function"
-	ExtensionLogs LogType = "extension"
-)
-
-type LogDestination struct {
-	protocol	string
-	URI		string
-}
-
-// NewLogsClient returns a Lambda Logs API client
-func NewLogsClient(awsLambdaRuntimeAPI string) *LogsClient {
-	baseURL := fmt.Sprintf("http://%s/%s/logs", awsLambdaRuntimeAPI, logsApiSchemaVersion)
-	fmt.Printf("baseURL", baseURL)
-	return &LogsClient{
-		baseURL:    baseURL,
-		httpClient: &http.Client{},
-	}
-}
-
-// Subscribe will subscribe the extension to logs via Lambda Logs API
-func (e *LogsClient) Subscribe(ctx context.Context, extensionIdentifier string) error {
-	// No subpath for subscription according to docs
-	const action = "/"
-	url := e.baseURL + action
-
-	reqBody, err := json.Marshal(map[string]interface{}{
-		"schemaVersion": logsApiSchemaVersion,
-		"types": []LogType{PlatformLogs},
-		"destination": LogDestination{protocol: "HTTP", URI: "http://sandbox:8080/"},
-	})
-	if err != nil {
-		return err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewBuffer(reqBody))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set(extensionIdentiferHeader, extensionIdentifier)
-	debug(httputil.DumpRequestOut(httpReq, true))
-	httpRes, err := e.httpClient.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	if httpRes.StatusCode != 200 {
-		debug(httputil.DumpResponse(httpRes, true))
-		return fmt.Errorf("request failed with status %s", httpRes.Status)
-	}
-	defer httpRes.Body.Close()
-	body, err := ioutil.ReadAll(httpRes.Body)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Subscribe response body: ", string(body))
-
-	return nil
-}
-
-func debug(data []byte, err error) {
-	if err == nil {
-		fmt.Printf("%s\n\n", data)
-	} else {
-		log.Fatalf("%s\n\n", err)
-	}
 }

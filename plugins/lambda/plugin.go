@@ -8,15 +8,13 @@ import (
 	"context"
 	"os"
 	"time"
-	"net/http"
-	"log"
-	"io/ioutil"
-	"fmt"
 
 	"github.com/open-policy-agent/opa/logging"
 	"github.com/open-policy-agent/opa/plugins"
 	"github.com/open-policy-agent/opa/runtime"
 	"github.com/open-policy-agent/opa/util"
+
+	"github.com/controlplaneio/opa-lambda-extension-plugin/plugins/logshttp"
 )
 
 const (
@@ -123,7 +121,6 @@ func (p *PluginFactory) New(manager *plugins.Manager, config interface{}) plugin
 		stop:    make(chan chan struct{}),
 		logger:  logger,
 		client:  NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API")),
-		logsclient:  NewLogsClient(os.Getenv("AWS_LAMBDA_RUNTIME_API")),
 	}
 
 	manager.UpdatePluginStatus(Name, &plugins.Status{State: plugins.StateNotReady})
@@ -152,7 +149,6 @@ type Plugin struct {
 	stop            chan chan struct{}
 	logger          logging.Logger
 	client          *Client
-	logsclient	*LogsClient
 	lastTriggerTime time.Time
 }
 
@@ -165,19 +161,12 @@ func (p *Plugin) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Start an HTTP server to listen for logs
-	http.HandleFunc("/", func(res http.ResponseWriter, req *http.Request) {
-		defer req.Body.Close()
-		body, _ := ioutil.ReadAll(req.Body)
-		fmt.Printf("Received logs", body)
-		fmt.Fprint(res, "OK")
-	})
-	go func() {
-		log.Fatal(http.ListenAndServe(":8080", nil))
-	}()
-
 	// Create a logs API client now we're registered and have an identifier
-	err = p.logsclient.Subscribe(ctx, p.client.extensionID)
+	logsHttpAgent, err := logshttp.NewHttpAgent()
+	if err != nil {
+		return err
+	}
+	err = logsHttpAgent.Init(p.client.extensionID)
 	if err != nil {
 		return err
 	}
