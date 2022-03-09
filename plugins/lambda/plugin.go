@@ -162,7 +162,9 @@ func (p *Plugin) Start(ctx context.Context) error {
 	}
 
 	// Create a logs API client now we're registered and have an identifier
-	logsHttpAgent, err := logshttp.NewHttpAgent()
+	// Include a channel for the client to signal when runtime done received
+	var runtimeDoneChannel chan bool = make(chan bool)
+	logsHttpAgent, err := logshttp.NewHttpAgent(runtimeDoneChannel)
 	if err != nil {
 		return err
 	}
@@ -182,7 +184,7 @@ func (p *Plugin) Start(ctx context.Context) error {
 		<-p.manager.ServerInitializedChannel()
 		// When loop starts, plugin signals to lambda that is is ready for events, so all
 		// OPA initialization should be complete by this point
-		p.loop()
+		p.loop(runtimeDoneChannel)
 	}()
 	return nil
 }
@@ -201,7 +203,7 @@ func (p *Plugin) Reconfigure(ctx context.Context, config interface{}) {
 	// no-op
 }
 
-func (p *Plugin) loop() {
+func (p *Plugin) loop(runtimeDoneChannel chan bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	for {
@@ -243,6 +245,11 @@ func (p *Plugin) loop() {
 				}
 				return
 			} else {
+				// Block on the runtime done signal to ensure the lambda function has made all of the
+				// queries it is going to make, before we trigger decision log forwarding
+				runtimeDoneSignalRaised := <-runtimeDoneChannel
+				p.logger.Debug("Received runtime done via channel: %v", runtimeDoneSignalRaised)
+
 				// If the minimum trigger threshold has elapsed, then trigger all the plugins
 				if time.Since(p.lastTriggerTime).Seconds() > float64(*p.config.MinimumTriggerThreshold) {
 					p.lastTriggerTime = time.Now()

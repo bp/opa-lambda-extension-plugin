@@ -5,6 +5,7 @@ package logshttp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -12,7 +13,7 @@ import (
 	"os"
 	"time"
 
-    "github.com/controlplaneio/opa-lambda-extension-plugin/plugins/logsapi"
+	"github.com/controlplaneio/opa-lambda-extension-plugin/plugins/logsapi"
 )
 
 // DefaultHttpListenerPort is used to set the URL where the logs will be sent by Logs API
@@ -20,13 +21,20 @@ const DefaultHttpListenerPort = "1234"
 
 // LogsApiHttpListener is used to listen to the Logs API using HTTP
 type LogsApiHttpListener struct {
-	httpServer *http.Server
+	httpServer         *http.Server
+	runtimeDoneChannel chan bool
+}
+
+type LogsAPIEvent struct {
+	Time      string `json:"time"`
+	EventType string `json:"type"`
 }
 
 // NewLogsApiHttpListener returns a LogsApiHttpListener
-func NewLogsApiHttpListener() (*LogsApiHttpListener, error) {
+func NewLogsApiHttpListener(runtimeDoneChannel chan bool) (*LogsApiHttpListener, error) {
 	return &LogsApiHttpListener{
-		httpServer: nil,
+		httpServer:         nil,
+		runtimeDoneChannel: runtimeDoneChannel,
 	}, nil
 }
 
@@ -69,6 +77,19 @@ func (h *LogsApiHttpListener) http_handler(w http.ResponseWriter, r *http.Reques
 	}
 
 	fmt.Printf("Logs API event received:", string(body))
+
+	var parsedBody []LogsAPIEvent
+	err = json.Unmarshal(body, &parsedBody)
+	if err != nil {
+		fmt.Printf("Error parsing body as JSON: %+v", err)
+		return
+	}
+
+	for _, v := range parsedBody {
+		if v.EventType == "platform.runtimeDone" {
+			h.runtimeDoneChannel <- true
+		}
+	}
 }
 
 // Shutdown terminates the HTTP server listening for logs
@@ -91,8 +112,8 @@ type HttpAgent struct {
 
 // NewHttpAgent returns an agent to listen and handle logs coming from Logs API for HTTP
 // Make sure the agent is initialized by calling Init(agentId) before subscription for the Logs API.
-func NewHttpAgent() (*HttpAgent, error) {
-	logsApiListener, err := NewLogsApiHttpListener()
+func NewHttpAgent(runtimeDoneChannel chan bool) (*HttpAgent, error) {
+	logsApiListener, err := NewLogsApiHttpListener(runtimeDoneChannel)
 	if err != nil {
 		return nil, err
 	}
